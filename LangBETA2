@@ -150,7 +150,7 @@ reboot_prompt() {
       ;;
     *)
       echo "No selection! Exiting..."
-      exit 0
+      exit 1
       ;;
   esac
 }

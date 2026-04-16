@@ -6,6 +6,8 @@
 # License: Apache 2.0
 # Version: 2.041626
 
+## -- Define Variables -- ##
+ostree_complete=false
 
 ## -- Define Functions -- ##
 
@@ -75,12 +77,31 @@ EOF
     echo "Done."
 }
 
+new_image() {
+    gum confirm "Cancel pending ostree operation?" && rpm-ostree cleanup -p || return 0
+}
+
 run_ostree_keepalive() {
+    if $ostree_complete; then
+        echo "Ostree already has an update queued."
+    fi
   local logfile
+  local choice
+  if [ "$1" == "update" ]; then
+        choice="rpm-ostree upgrade"
+  elif [ "$1" == "nvidia" ]; then
+        choice="sudo bootc switch ghcr.io/ublue-os/bluefin-nvidia:stable --enforce-container-sigpolicy"
+  elif [ "$1" == "rebase" ]; then
+        choice="ujust --rebase-helper"
+  else
+    echo "Invalid choice for run_ostree_keepalive: $1"
+    return 1
+  fi
+  
   logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
 
   # Start rpm-ostree in background
-  sudo rpm-ostree upgrade >"$logfile" 2>&1 &
+  sudo "$choice" >"$logfile" 2>&1 &
   local pid=$!
 
   # Spinner runs in parallel but does NOT wait inside gum
@@ -106,15 +127,39 @@ run_ostree_keepalive() {
   if [ "$rc" -eq 0 ]; then
     echo "System image built successfully."
     rm -f "$logfile"
+    ostree_complete=true
     return 0
   else
     echo "Ostree update failed (exit code $rc). Last 200 lines:"
     sudo tail -n 200 "$logfile"
+    new_image
     return $rc
   fi
 }
 
 nvidia_rebase() {
-    gum confirm && ""
+    if [ gum confirm "Does this device have an NVIDIA discrete graphics unit?" ]; then
+            gum confirm "Rebase to Bluefin-NVIDIA image?" \
+                && run_ostree_keepalive "nvidia" || echo "Cancelling NVIDIA rebase..." && return 0
+    gum spin --spinner dot --title "Updating system flatpaks..." \
+        -- if flatpack remotes | grep -q system; then
+                flatpak update -y
+           fi
+    gum spin --spinner dot --title "Updating user flatpacks..." \
+        -- if flatpack remotes | grep -q user; then
+                flatpak update --user -y
+           fi
+    fi
 }
 
+# --- Main Script -- #
+gum confirm "Display hardware information?" \
+    && display_info || tee >> /dev/null
+gum confirm "Run auto-configuration?" \
+    && auto_configure || tee >> /dev/null
+gum confirm "Has the MOK (secure boot key) been enrolled?" \
+    && echo "Skipping MOK enrollment..." || ujust enroll-secure-boot-key && echo "Key ready. Please reboot with Secure Boot ENABLED to finish install."
+nvidia_rebase
+if ! $ostree_complete; then
+    gum confirm "Run system updates?" \
+        && ujust --update || echo "Skipping system updates..."
