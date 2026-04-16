@@ -1,8 +1,9 @@
 #!/bin/bash
 
 ## --- BLUEFIN AUTO-CONFIGURATION SCRIPT ---
-# Written by Devon Buecher for C4PIN.org
-# License CC BY-NC-SA 4.0
+# Written for C4PIN.org
+# Author: KitsuneRhin @github
+# License: Apache 2.0
 # Version: 01262026
 
 
