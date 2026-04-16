@@ -1,0 +1,179 @@
+#!/bin/bash
+
+## --- AUTO-CREATION: SECOND-LANGUAGE USER ---
+# Written by Devon Buecher for C4PIN.org
+# License: Apache 2.0
+# Version: 041326
+
+set -euo pipefail
+
+## -- Language Codes --
+british="en_GB.UTF-8"
+mexican="es_MX.UTF-8"
+quebec="fr_CA.UTF-8"
+syrian="ar_SY.UTF-8"
+ukrainian="uk_UA.UTF-8"
+russian="ru_RU.UTF-8"
+colombian="es_CO.UTF-8"
+
+## -- Internal Variables -- ##
+USERNAME=""
+PASSWD=""
+LANG=""
+
+run_layer_keepalive() {
+  local langpack="$1"
+  local logfile
+  logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
+
+  # Start rpm-ostree in background
+  sudo rpm-ostree install -y "glibc-langpack-${langpack}" >"$logfile" 2>&1 &
+  local pid=$!
+
+  # Spinner runs in parallel but does NOT wait inside gum
+  (
+    while kill -0 "$pid" 2>/dev/null; do
+      last=$(tail -n 50 "$logfile" | sed -n '/./p' | tail -n1)
+      last=${last:-"(no output yet)"}
+      echo "… $last"
+      sleep 2
+    done
+  ) | gum spin --spinner dot --title "Layering language pack ${langpack}" >/dev/null 2>&1 &
+
+  local spinner_pid=$!
+
+  # Wait for the real rpm-ostree process
+  wait "$pid"
+  local rc=$?
+
+  # Stop spinner cleanly
+  kill "$spinner_pid" 2>/dev/null || true
+  wait "$spinner_pid" 2>/dev/null || true
+
+  if [ "$rc" -eq 0 ]; then
+    echo "Layering completed successfully."
+    rm -f "$logfile"
+    return 0
+  else
+    echo "Layering failed (exit code $rc). Last 200 lines:"
+    sudo tail -n 200 "$logfile"
+    return $rc
+  fi
+}
+
+
+## -- Part 1 -- ##
+# Create Profile and Layer in Language Pack (user-specific)
+part_1() {
+  echo "Creating user profile '$USERNAME'..."
+  sudo useradd -m "$USERNAME"
+
+  echo "Setting user password..."
+  echo "$USERNAME:$PASSWD" | sudo chpasswd
+
+  echo "Adding user to admin group..."
+  sudo usermod -aG wheel "$USERNAME"
+
+  echo "Creating language configuration files..."
+  sudo mkdir -p /var/lib/AccountsService/users
+  sudo tee /var/lib/AccountsService/users/"$USERNAME" > /dev/null <<EOF
+[User]
+Language=$LANG
+EOF
+  sudo chown root:root /var/lib/AccountsService/users/"$USERNAME"
+  sudo chmod 644 /var/lib/AccountsService/users/"$USERNAME"
+
+  langpack=$(echo "$LANG" | cut -d_ -f1 | cut -d. -f1)
+  if ! run_layer_keepalive "$langpack"; then
+  	gum confirm "Layering failed. Continue anyway?" || { echo "Aborting."; exit 1; }
+  fi
+}
+
+## -- Part 2 -- ##
+# Configure Local Language Options
+part_2() {
+  gum spin --spinner dot --title "Applying keyboard configuration..." -- sleep 3
+  sudo mkdir -p /etc/dconf/db/local.d
+  sudo tee /etc/dconf/db/local.d/00-keyboard > /dev/null <<EOF
+[org/gnome/desktop/input-sources]
+xkb-options=['compose:ralt','lv3:rwin']
+EOF
+
+  if ! grep -q '^system-db:local' /etc/dconf/profile/user 2>/dev/null; then
+    echo -e "user-db:user\nsystem-db:local" | sudo tee /etc/dconf/profile/user > /dev/null
+  fi
+
+  gum spin --spinner dot --title "Updating program locales..." -- sleep 3
+  sudo dconf update
+  echo "Locales updated."
+}
+
+## -- Language Selection Menu -- ##
+select_lang() {
+  LANG_OPTIONS=(
+    "English (UK):british"
+    "Spanish (Mexico):mexican"
+    "Spanish (Colombia):colombian"
+    "French (Canada):quebec"
+    "Arabic (Syria):syrian"
+    "Ukrainian:ukrainian"
+    "Russian:russian"
+  )
+
+  echo "Select a language:"
+  selection=$(printf "%s\n" "${LANG_OPTIONS[@]}" | cut -d: -f1 | gum choose)
+  varname=$(printf "%s\n" "${LANG_OPTIONS[@]}" | grep "^$selection:" | cut -d: -f2)
+  LANG=${!varname}
+}
+
+## -- Reboot Menu -- ##
+reboot_prompt() {
+  choice=$(printf "%s\n" \
+    "Reboot now" \
+    "Reboot later (exit)" \
+    | gum choose --height=8 --cursor=">")
+
+  case "$choice" in
+    "Reboot now")
+      if gum confirm "Reboot now? This will disconnect the session."; then
+        gum spin --spinner dot --title "Rebooting..." -- bash -c "sudo systemctl reboot"
+        exit 0
+      else
+        echo "Reboot canceled, exiting."
+        exit 0
+      fi
+      ;;
+    "Reboot later (exit)")
+      echo "Restart sequence canceled."
+      exit 0
+      ;;
+    *)
+      echo "No selection! Exiting..."
+      exit 0
+      ;;
+  esac
+}
+
+## -- Main -- ##
+echo -e "\n-- Second-Language Profile Creator --\n"
+select_lang
+# User Inputs
+USERNAME=$(gum input --placeholder "enter new username...")
+match=0
+while [ "$match" -eq 0 ]; do
+  var1=$(gum input --placeholder "enter password for $USERNAME...")
+  var2=$(gum input --placeholder "re-type password...")
+  if [ "$var1" == "$var2" ]; then
+    match=1
+    PASSWD=${var1}
+  else
+    echo -e "\n Entries do not match. Please try again."
+  fi
+done
+# --
+part_1
+part_2
+
+echo -e "\nSystem requires a reboot to finish configuration."
+reboot_prompt
+exit 0
