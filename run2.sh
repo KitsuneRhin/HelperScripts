@@ -8,6 +8,7 @@
 
 ## -- Variables -- ##
 ostree_complete=false
+needs_reboot==false
 
 ## -- Define Functions -- ##
 
@@ -26,13 +27,13 @@ display_info() {
 
     # - Storage -
     echo -e "\n*--- Storage ---*"
-    if lsblk | grep -q "msblk"; then 
-        lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|msblk"
+    if lsblk | grep -q "mmcblk"; then 
+        lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|mmcblk"
     fi
     if lsblk | grep -q "nvme0n1"; then 
         lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|nvme0n1"
     else
-    echo "No NVMe drive found. Listing all disks..."
+        echo "No NVMe drive found. Listing all disks..."
         for disk in sda sdb sdc; do
             if lsblk | grep -q "$disk"; then
                 lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|$disk"
@@ -43,9 +44,9 @@ display_info() {
     # - Battery info -
     echo -e "\n*--- Battery ---*"
     bat_found=false
-    for i in {0...3}; do
+    for i in {0..3}; do
         if upower -e | grep -q "BAT$i"; then
-            upower -i /org/freedesktop/UPower/devices/battery_BAT$i | grep --color=always -E "capacity:|energy-full:|energy-full-design:|time to empty:" | sed 's/^[[:space:]]*//'
+            upower -i /org/freedesktop/UPower/devices/battery_BAT"$i" | grep --color=always -E "capacity:|energy-full:|energy-full-design:|time to empty:" | sed 's/^[[:space:]]*//'
             bat_found=true
         fi
     done
@@ -53,63 +54,66 @@ display_info() {
         echo "Battery not found!"
     fi
 }
+# -------------------------------------------------------------------------------
 
 auto_configure() {
-    echo "Starting auto-configuration process..."
-    # --- Install Override for Shutdown-on-Close ---
-    gum spin --spinnder dot --title "Applying power configuration" -- sleep 3
-    cat >> /etc/systemd/logind.conf<< EOF
+    # --- Install Drop-in Override for Shutdown-on-Close ---
+    gum spin --spinner dot --title "Applying power configuration" -- sleep 3
+    sudo mkdir -p /etc/systemd/logind.conf.d
+    sudo tee /etc/systemd/logind.conf.d/lid-switch.conf > /dev/null << EOF
 [Login]
-lidswitch-ignore-inhibited=yes
+LidSwitchIgnoreInhibited=yes
 HandleLidSwitch=suspend
 HandleLidSwitchExternalPower=suspend
 HandleLidSwitchDocked=suspend
 EOF
 
+    # --- Update Touchpad and Keyboard Settings ---
     gum spin --spinner dot --title "Applying input configuration..." -- sleep 3
     gsettings set org.gnome.desktop.input-sources xkb-options "['compose:ralt','lv3:rwin']"
-    gsettings set org.gnome.desktop.periherals.touchpad tap-to-click true
+    gsettings set org.gnome.desktop.peripherals.touchpad tap-to-click true
     gsettings set org.gnome.desktop.peripherals.touchpad natural-scroll true
     gsettings set org.gnome.desktop.peripherals.touchpad disable-while-typing true
     gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
-
     gum spin --spinner dot --title "Reloading systemd services" -- sleep 2
     systemctl daemon-reload && systemctl daemon-reexec
-    echo "Done."
 }
+# -------------------------------------------------------------------------------
 
 ostree_cleanup() {
-    if $1 == 0; then
+    if [ "$1" -eq 0 ]; then
         echo "Ostree already has an update queued."
-        gum confirm "Cancel pending ostree operation?" && tee >> /dev/null || return 0
+        gum confirm "Cancel pending ostree operation?" && true || return 0
     fi
-    gum spin --spinner dot --title "Cancelling ostree operation..." -- rpm-ostree cancel && rpm-ostree cleanup -p
+    gum spin --spinner dot --title "Cancelling..." -- rpm-ostree cancel  
+    gum spin --spinner dot --title "Cancelling..." -- rpm-ostree cleanup -p
     ostree_complete=false
 }
+# -------------------------------------------------------------------------------
 
 run_ostree_keepalive() {
     if $ostree_complete; then
         ostree_cleanup 0
     fi
   local logfile
-  local choice
-  if [ "$1" == "update" ]; then
-        choice="rpm-ostree upgrade"
-  elif [ "$1" == "nvidia" ]; then
-        choice="sudo bootc switch ghcr.io/ublue-os/bluefin-nvidia:stable --enforce-container-sigpolicy"
-  elif [ "$1" == "rebase" ]; then
+  local -a choice_cmd
+    if [ "$1" == "update" ]; then
+        choice_cmd=(rpm-ostree upgrade)
+    elif [ "$1" == "nvidia" ]; then
+        choice_cmd=(bootc switch ghcr.io/ublue-os/bluefin-nvidia:stable --enforce-container-sigpolicy)
+    elif [ "$1" == "rebase" ]; then
         ujust --rebase-helper
         ostree_complete=true
         return 0
-  else
-    echo "Invalid choice for run_ostree_keepalive: $1"
-    return 1
-  fi
+    else
+        echo "Invalid choice for run_ostree_keepalive: $1"
+        return 1
+    fi
   
   logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
 
   # Start rpm-ostree in background
-  sudo "$choice" >"$logfile" 2>&1 &
+  "${choice_cmd[@]}" >"$logfile" 2>&1 &
   local pid=$!
 
   # Spinner runs in parallel but does NOT wait inside gum
@@ -133,7 +137,7 @@ run_ostree_keepalive() {
   wait "$spinner_pid" 2>/dev/null || true
 
   if [ "$rc" -eq 0 ]; then
-    echo "System image built successfully."
+    echo "System image ready."
     rm -f "$logfile"
     ostree_complete=true
     return 0
@@ -144,31 +148,57 @@ run_ostree_keepalive() {
     return $rc
   fi
 }
+# -------------------------------------------------------------------------------
 
 system_update() {
     if gum confirm "Does this device have an NVIDIA discrete graphics unit?"; then
             gum confirm "Rebase to Bluefin-NVIDIA image?" \
-                && run_ostree_keepalive "nvidia" || echo "Cancelling NVIDIA rebase..." && return 0
+                && run_ostree_keepalive "nvidia" || return 0
     fi
     
     if gum confirm "Run system updates?"; then
         if ! $ostree_complete; then
             run_ostree_keepalive "update"
         else
-            echo "Ostree already has an update queued."
-            ostree_cleanup
+            ostree_cleanup 0
         fi
         gum spin --spinner dot --title "Updating system flatpaks..." \
-        -- if flatpack remotes | grep -q system; then
-                flatpak update -y
-           fi
-        gum spin --spinner dot --title "Updating user flatpacks..." \
-        -- if flatpack remotes | grep -q user; then
-                flatpak update --user -y
-           fi
+            -- bash -c "flatpak update -y"
+        gum spin --spinner dot --title "Updating user flatpaks..." \
+            -- bash -c "flatpak update --user -y"
     else echo "Skipping system updates..."
     fi
 }
+# -------------------------------------------------------------------------------
+
+## -- Reboot Menu -- ##
+reboot_prompt() {
+    choice=$(printf "%s\n" \
+        "Reboot" \
+        "Shutdown" \
+        "Quit" \
+        | gum choose --height=8 --cursor=">")
+    
+    local _flag
+    case "$choice" in
+        "Reboot")
+            gum confirm "Reboot to BIOS?" && _flag="--firmware-setup" || true
+            gum spin --spinner dot --title "System rebooting..." -- bash -c "systemctl reboot "${bios_flag}""
+            ;;
+        "Shutdown")
+            gum spin --spinner dot --title "Shutting down..." -- bash -c "systemctl poweroff"
+            ;;
+        "Quit")
+            echo "goodbye."
+            exit 0
+            ;;
+        *)
+            echo "Invalid entry. Exiting..."
+            exit 1
+            ;;
+    esac
+}
+# -------------------------------------------------------------------------------
 
 # --- Main Script -- #
 if ! rpm-ostree status | grep -qE "idle|Idle"; then
@@ -177,10 +207,16 @@ if ! rpm-ostree status | grep -qE "idle|Idle"; then
 fi
 
 gum confirm "Display hardware information?" \
-    && display_info || tee >> /dev/null
+    && display_info || true
+
 gum confirm "Run auto-configuration?" \
     && auto_configure || echo "Skipping auto-configuration..."
-gum confirm "Has the MOK (secure boot key) been enrolled?" \
-    && echo "Skipping MOK enrollment..." || ujust enroll-secure-boot-key && echo "Key ready. Please reboot with Secure Boot ENABLED to finish install."
-system_update
 
+if gum confirm "Has the MOK (secure boot key) been enrolled?"; then
+    echo "Skipping MOK enrollment..."
+else
+    gum spin --spinner dot -- ujust enroll-secure-boot-key
+fi
+
+system_update
+reboot_prompt
