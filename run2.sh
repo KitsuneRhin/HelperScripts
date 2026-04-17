@@ -9,10 +9,10 @@
 ## -- Variables & Helpers -- ##
 ostree_complete=false
 needs_reboot=false
-warn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
+warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
-ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
-info()  { gum style --foreground "#8be9fd" "  $*"; }
+ok()    { gum style --foreground "#00ff00" "✓ $*"; }
+info()  { gum style --foreground "#00aaff" "  $*"; }
 
 ## -- Define Functions -- ##
 
@@ -22,15 +22,18 @@ display_info() {
     # - PC Info -
     info "-- System --"
     sudo dmidecode -t system | grep --color=always -E "Manufacturer|Product Name|Serial Number" | sed 's/^[[:space:]]*//'
-
+	echo ""
+	
     # - CPU Model -
     info "-- CPU --"
     lscpu | grep --color=always -E "Model name:" | sed -E 's/\s+/ /g'
-
+	echo ""
+	
     # - Memory -
     info "-- RAM --"
     cat /proc/meminfo | numfmt --field 2 --from-unit=Ki --to=iec | sed 's/ kB//g' | grep --color=always -E "MemTotal:" | sed -E 's/\s+/ /g'
-
+	echo ""
+	
     # - Storage -
     info "-- Storage --"
     if lsblk | grep -q "mmcblk"; then 
@@ -46,7 +49,8 @@ display_info() {
             fi
         done
     fi
-
+	echo ""
+	
     # - Battery info -
     info "-- Battery --"
     bat_found=false
@@ -223,18 +227,16 @@ reboot_prompt() {
 # -------------------------------------------------------------------------------
 
 # --- Main Script -- #
+gum spin --spinner dot --title "Initializing tool environment..." -- sleep 1
 if [[ "$1" != "--inhibited" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS
     exec systemd-inhibit --what=sleep:idle \
                          --who="C4PIN Config Tool" \
                          --why="Running auto-configuration" \
                          --mode=block \
                          bash "$0" --inhibited
 fi
-
 echo ""
-gum spin --spinner dot --title "Initializing tool environment..." -- sleep 3
-gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
-
 info "Bluefin Triage and Configuration Tool"
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
@@ -248,17 +250,20 @@ gum confirm "Display hardware information?" \
 gum confirm "Run auto-configuration?" \
     && auto_configure || echo "Skipping auto-configuration..."
 
+echo ""
 if gum confirm "Has the Secure Boot key been enrolled?"; then
     echo "Skipping MOK enrollment..."
 else
-    gum spin --spinner dot --title "Working..." -- sleep 3
-    if ! ujust enroll-secure-boot-key | grep -qE "SKIP|already enrolled"; then
+    gum spin --spinner dot --title "Working..." -- sleep 2
+    local mok_output=$(ujust enroll-secure-boot-key 2>&1)
+    if echo "$mok_output" | grep -qE "SKIP|already enrolled"; then
+        ok "Secure Boot Key is already registered."
+        
+    else 
         needs_reboot=true
         warn "At next reboot, ensure that secure boot is enabled in the BIOS."
-        info "The mokutil UEFI menu will be displayed upon boot. Select "Enroll MOK""
-        info "Enter < universalblue > as the password."
-    else 
-        ok "Secure Boot Key is already registered."
+        echo -e "\nThe mokutil UEFI menu will be displayed upon boot."
+        info "Select 'Enroll MOK', then enter < universalblue > as the password."
     fi
 fi
 
@@ -267,6 +272,5 @@ system_update
 if $needs_reboot; then 
     warn "Logs indicate the system requires a reboot"
 fi
-gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'
 
 reboot_prompt
