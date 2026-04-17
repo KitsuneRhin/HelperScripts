@@ -2,9 +2,9 @@
 
 # --- BLUEFIN AUTO-CONFIGURATION SCRIPT ---
 # Written for C4PIN.org
-# Author: Devon Buecher KitsuneRhin@github
+# Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.041626
+# Version: 2.041726
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
@@ -42,7 +42,7 @@ display_info() {
     if lsblk | grep -q "nvme0n1"; then 
         lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|nvme0n1"
     else
-        info "No NVMe drive found. Listing all disks..."
+        warn "No NVMe drive found. Listing all disks..."
         for disk in sda sdb sdc; do
             if lsblk | grep -q "$disk"; then
                 lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|$disk"
@@ -118,8 +118,8 @@ run_ostree_keepalive() {
     if $ostree_complete; then
         ostree_cleanup 0
     fi
-  local logfile
-  local -a choice_cmd
+   local logfile
+   local -a choice_cmd
     if [ "$1" == "update" ]; then
         choice_cmd=(rpm-ostree upgrade)
     elif [ "$1" == "nvidia" ]; then
@@ -132,52 +132,49 @@ run_ostree_keepalive() {
         err "Invalid choice for run_ostree_keepalive: $1"
         return 1
     fi
-  
-  logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
 
-  # Start rpm-ostree in background
-  "${choice_cmd[@]}" >"$logfile" 2>&1 &
-  local pid=$!
+    logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
 
-  # Spinner runs in parallel but does NOT wait inside gum
-  (
-    while kill -0 "$pid" 2>/dev/null; do
-      last=$(tail -n 50 "$logfile" | sed -n '/./p' | tail -n1)
-      last=${last:-"(no output yet)"}
-      echo "… $last"
-      sleep 2
-    done
-  ) | gum spin --spinner dot --title "Building system image..." >/dev/null 2>&1 &
+    # Start rpm-ostree in background
+    ( "${choice_cmd[@]}" >"$logfile" 2>&1; echo $? >"$logfile.rc" ) &
+    local pid=$!
 
-  local spinner_pid=$!
+    # Phase 1: exits when rpm-ostree has finished its check and made a decision
+    gum spin --spinner dot --title "Checking for updates..." -- \
+        bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already up to date' '$logfile' 2>/dev/null; do sleep 1; done"
 
-  # Wait for the real rpm-ostree process
-  wait "$pid"
-  local rc=$?
-
-  # Stop spinner cleanly
-  kill "$spinner_pid" 2>/dev/null || true
-  wait "$spinner_pid" 2>/dev/null || true
-
-  if [ "$rc" -eq 0 ]; then
-    if grep -qiE "no upgrade available|already up to date" "$logfile"; then
-        ok "System image is already up to date."
-        rm -f "$logfile"
-        ostree_complete=false  # nothing queued, no reboot needed
-        return 0
+    # Phase 2: only fires if actual content is being downloaded/staged
+    if grep -qiE "Downloading|Staging deployment" "$logfile"; then
+        gum spin --spinner dot --title "Building system image..." -- \
+            bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
     fi
-    ok "System image ready"
-    rm -f "$logfile"
-    ostree_complete=true
-    needs_reboot=true
-    return 0
-  else
-    err "Ostree update failed!" && info "(exit code $rc)."
-        if gum confirm "Display logs?"; then tail -n 200 "$logfile"
+
+    wait "$pid" 2>/dev/null
+    local rc
+    rc=$(cat "$logfile.rc" 2>/dev/null)
+    rc=${rc:-1}
+
+    if [ "$rc" -eq 0 ]; then
+        if grep -qiE "no upgrade available|already up to date" "$logfile"; then
+            ok "System image is already up to date."
+            rm -f "$logfile" "$logfile.rc"
+            ostree_complete=false
+            return 0
         fi
-    ostree_cleanup 1
-    return $rc
-  fi
+        ok "System image ready."
+        rm -f "$logfile" "$logfile.rc"
+        ostree_complete=true
+        needs_reboot=true
+        return 0
+    else
+        err "Ostree update failed!" && info "(exit code $rc)."
+        if gum confirm "Display logs?"; then
+            tail -n 200 "$logfile"
+        fi
+        rm -f "$logfile" "$logfile.rc"
+        ostree_cleanup 1
+        return $rc
+    fi
 }
 # -------------------------------------------------------------------------------
 
