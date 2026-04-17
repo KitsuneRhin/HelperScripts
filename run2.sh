@@ -225,6 +225,7 @@ reboot_prompt() {
 # --- Main Script -- #
 echo "" && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 gnome-extensions enable caffeine@patapon.info
+gum spin --spinner dot --title "Initializing tool environment..." -- sleep 3
 gdbus call --session \
     --dest org.gnome.Shell \
     --object-path /org/gnome/Shell/Extensions/Caffeine \
