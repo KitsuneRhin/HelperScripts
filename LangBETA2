@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-## -- Language Codes --
+## -- Language Codes -- ##
 british="en_GB.UTF-8"
 mexican="es_MX.UTF-8"
 quebec="fr_CA.UTF-8"
