@@ -2,7 +2,7 @@
 
 # --- BLUEFIN AUTO-CONFIGURATION SCRIPT ---
 # Written for C4PIN.org
-# Author: KitsuneRhin @github
+# Author: Devon Buecher KitsuneRhin@github
 # License: Apache 2.0
 # Version: 2.041626
 
@@ -214,9 +214,10 @@ reboot_prompt() {
 # -------------------------------------------------------------------------------
 
 # --- Main Script -- #
+echo "" && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 info "Bluefin Triage and Configuration Tool"
 
-if ! rpm-ostree status | grep -qE "idle|Idle"; then
+if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
     ostree_complete=true
     ostree_cleanup 0
 fi
@@ -246,4 +247,5 @@ system_update
 if $needs_reboot; then 
     warn "Logs indicate the system requires a reboot"
 fi
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'
 reboot_prompt
