@@ -21,6 +21,26 @@ colombian="es_CO.UTF-8"
 USERNAME=""
 PASSWD=""
 LANG=""
+ostree_complete=false
+
+warn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
+err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
+ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
+info()  { gum style --foreground "#8be9fd" "  $*"; }
+
+ostree_cleanup() {
+    if [ "$1" -eq 0 ]; then
+        warn "Ostree already has an update queued."
+        gum confirm "Cancel pending ostree operation?" && true || info "Reboot PC to finish pending operation before running 2ndLang"
+    fi
+    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
+    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
+    ostree_complete=falsewarn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
+err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
+ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
+info()  { gum style --foreground "#8be9fd" "  $*"; }
+    ok "Ostree cleared"
+}
 
 run_layer_keepalive() {
   local langpack="$1"
@@ -53,11 +73,14 @@ run_layer_keepalive() {
 
   if [ "$rc" -eq 0 ]; then
     echo "Layering completed successfully."
+    ostree_complete=true
     rm -f "$logfile"
     return 0
   else
-    echo "Layering failed (exit code $rc). Last 200 lines:"
-    sudo tail -n 200 "$logfile"
+    err "Ostree update failed!" && info "(exit code $rc)."
+        if gum confirm "Display logs?"; then tail -n 200 "$logfile"
+        fi
+    ostree_cleanup 1
     return $rc
   fi
 }
@@ -87,6 +110,7 @@ EOF
   langpack=$(echo "$LANG" | cut -d_ -f1 | cut -d. -f1)
   if ! run_layer_keepalive "$langpack"; then
   	gum confirm "Layering failed. Continue anyway?" || { echo "Aborting."; exit 1; }
+    ostree_complete=false
   fi
 }
 
@@ -136,7 +160,7 @@ reboot_prompt() {
 
   case "$choice" in
     "Reboot now")
-      if gum confirm "Reboot now? This will disconnect the session."; then
+      if gum confirm "Reboot now?"; then
         gum spin --spinner dot --title "Rebooting..." -- bash -c "sudo systemctl reboot"
         exit 0
       else
@@ -157,6 +181,15 @@ reboot_prompt() {
 
 ## -- Main -- ##
 echo -e "\n-- Second-Language Profile Creator --\n"
+
+if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
+    ostree_complete=true
+    ostree_cleanup 0
+    if $ostree_complete; then
+      reboot_prompt
+    fi
+fi
+
 select_lang
 # User Inputs
 USERNAME=$(gum input --placeholder "enter new username...")
@@ -175,6 +208,9 @@ done
 part_1
 part_2
 
-echo -e "\nSystem requires a reboot to finish configuration."
+echo ""
+if $ostree_complete; then
+  warn "System requires a reboot to finish configuration."
+fi
 reboot_prompt
 exit 0

@@ -66,6 +66,15 @@ display_info() {
 auto_configure() {
     # --- Install Drop-in Override for Shutdown-on-Close ---
     gum spin --spinner dot --title "Applying power configuration" -- sleep 3
+    gsettings set org.gnome.desktop.session idle-delay 600 # 10 min
+    gsettings set org.gnome.settings-daemon.plugins.power idle-dim true
+    gsettings set org.gnome.settings-daemon.plugins.power idle-brightness 20
+    gsettings set org.gnome.desktop.screensaver lock-enabled true
+    gsettings set org.gnome.desktop.screensaver lock-delay 30
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 1800 # 30 min
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'suspend'
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 900 # 15 min
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'suspend'
     sudo mkdir -p /etc/systemd/logind.conf.d
     sudo tee /etc/systemd/logind.conf.d/lid-switch.conf > /dev/null << EOF
 [Login]
@@ -215,6 +224,13 @@ reboot_prompt() {
 
 # --- Main Script -- #
 echo "" && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+gnome-extensions enable caffeine@patapon.info
+gdbus call --session \
+    --dest org.gnome.Shell \
+    --object-path /org/gnome/Shell/Extensions/Caffeine \
+    --method org.gnome.Shell.Extensions.Caffeine.SetInhibit \
+    true
+
 info "Bluefin Triage and Configuration Tool"
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
@@ -248,4 +264,11 @@ if $needs_reboot; then
     warn "Logs indicate the system requires a reboot"
 fi
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'
+gdbus call --session \
+    --dest org.gnome.Shell \
+    --object-path /org/gnome/Shell/Extensions/Caffeine \
+    --method org.gnome.Shell.Extensions.Caffeine.SetInhibit \
+    false
+gnome-extensions disable caffeine@patapon.info
+
 reboot_prompt
