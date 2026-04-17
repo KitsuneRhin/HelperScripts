@@ -160,6 +160,12 @@ run_ostree_keepalive() {
   wait "$spinner_pid" 2>/dev/null || true
 
   if [ "$rc" -eq 0 ]; then
+    if grep -qiE "no upgrade available|already up to date" "$logfile"; then
+        ok "System image is already up to date."
+        rm -f "$logfile"
+        ostree_complete=false  # nothing queued, no reboot needed
+        return 0
+    fi
     ok "System image ready"
     rm -f "$logfile"
     ostree_complete=true
@@ -191,13 +197,28 @@ system_update() {
             -- bash -c "flatpak update -y"
         gum spin --spinner dot --title "Updating user flatpaks..." \
             -- bash -c "flatpak update --user -y"
-        ok "Flatpak updates"
+        ok "Flatpaks updated."
     else echo "Skipping system updates..."
     fi
 }
 # -------------------------------------------------------------------------------
 
-## -- Reboot Menu -- ##
+mok_util() {
+    echo ""
+    gum spin --spinner dot --title "Working..." -- sleep 2
+        mok_output=$(ujust enroll-secure-boot-key 2>&1)
+        if echo "$mok_output" | grep -qE "SKIP|already enrolled"; then
+            ok "Secure Boot Key is already registered."
+        
+        else 
+            needs_reboot=true
+            warn "At next reboot, ensure that secure boot is enabled in the BIOS."
+            echo -e "\nThe mokutil UEFI menu will be displayed upon boot."
+            info "Select 'Enroll MOK', then enter < universalblue > as the password."
+        fi
+}
+# -------------------------------------------------------------------------------
+
 reboot_prompt() {
     choice=$(printf "%s\n" \
         "Reboot" \
@@ -215,7 +236,7 @@ reboot_prompt() {
             gum spin --spinner dot --title "Shutting down..." -- bash -c "systemctl poweroff"
             ;;
         "Quit")
-            ok " goodbye."
+            echo "Goodbye."
             exit 0
             ;;
         *)
@@ -236,6 +257,7 @@ if [[ "$1" != "--inhibited" ]]; then
                          --mode=block \
                          bash "$0" --inhibited
 fi
+
 echo ""
 info "Bluefin Triage and Configuration Tool"
 
@@ -250,27 +272,15 @@ gum confirm "Display hardware information?" \
 gum confirm "Run auto-configuration?" \
     && auto_configure || echo "Skipping auto-configuration..."
 
-echo ""
-if gum confirm "Has the Secure Boot key been enrolled?"; then
-    echo "Skipping MOK enrollment..."
-else
-    gum spin --spinner dot --title "Working..." -- sleep 2
-    local mok_output=$(ujust enroll-secure-boot-key 2>&1)
-    if echo "$mok_output" | grep -qE "SKIP|already enrolled"; then
-        ok "Secure Boot Key is already registered."
-        
-    else 
-        needs_reboot=true
-        warn "At next reboot, ensure that secure boot is enabled in the BIOS."
-        echo -e "\nThe mokutil UEFI menu will be displayed upon boot."
-        info "Select 'Enroll MOK', then enter < universalblue > as the password."
-    fi
-fi
+gum confirm "Has the Secure Boot key been enrolled?" \
+    && echo "Skipping MOK enrollment..." || mok_util
 
 system_update
 
+echo ""
+ok "-- Script complete. --"
+echo ""
 if $needs_reboot; then 
-    warn "Logs indicate the system requires a reboot"
+    warn "Logs indicate the system requires a reboot."
 fi
-
 reboot_prompt
