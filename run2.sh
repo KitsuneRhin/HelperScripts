@@ -6,34 +6,39 @@
 # License: Apache 2.0
 # Version: 2.041626
 
-## -- Variables -- ##
+## -- Variables & Helpers -- ##
 ostree_complete=false
 needs_reboot==false
+warn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
+err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
+ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
+info()  { gum style --foreground "#8be9fd" "  $*"; }
 
 ## -- Define Functions -- ##
 
 display_info() {
     gum spin --spinner dot --title "Gathering system info..." -- sleep 2
     # - PC Info -
+    info "-- System --"
     sudo dmidecode -t system | grep --color=always -E "Manufacturer|Product Name|Serial Number" | sed 's/^[[:space:]]*//'
 
     # - CPU Model -
-    echo -e "\n*--- CPU ---*"
+    info "-- CPU --"
     lscpu | grep --color=always -E "Model name:" | sed -E 's/\s+/ /g'
 
     # - Memory -
-    echo -e "\n*--- RAM ---*"
+    info "-- RAM --"
     cat /proc/meminfo | numfmt --field 2 --from-unit=Ki --to=iec | sed 's/ kB//g' | grep --color=always -E "MemTotal:" | sed -E 's/\s+/ /g'
 
     # - Storage -
-    echo -e "\n*--- Storage ---*"
+    info "-- Storage --"
     if lsblk | grep -q "mmcblk"; then 
         lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|mmcblk"
     fi
     if lsblk | grep -q "nvme0n1"; then 
         lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|nvme0n1"
     else
-        echo "No NVMe drive found. Listing all disks..."
+        info "No NVMe drive found. Listing all disks..."
         for disk in sda sdb sdc; do
             if lsblk | grep -q "$disk"; then
                 lsblk -d -o NAME,SIZE | grep --color=always -E "^NAME|$disk"
@@ -42,7 +47,7 @@ display_info() {
     fi
 
     # - Battery info -
-    echo -e "\n*--- Battery ---*"
+    info "-- Battery --"
     bat_found=false
     for i in {0..3}; do
         if upower -e | grep -q "BAT$i"; then
@@ -51,7 +56,7 @@ display_info() {
         fi
     done
     if ! $bat_found; then
-        echo "Battery not found!"
+        err "Battery not found!"
     fi
 }
 # -------------------------------------------------------------------------------
@@ -67,6 +72,7 @@ HandleLidSwitch=suspend
 HandleLidSwitchExternalPower=suspend
 HandleLidSwitchDocked=suspend
 EOF
+ok "Power Config"
 
     # --- Update Touchpad and Keyboard Settings ---
     gum spin --spinner dot --title "Applying input configuration..." -- sleep 3
@@ -77,17 +83,19 @@ EOF
     gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
     gum spin --spinner dot --title "Reloading systemd services" -- sleep 2
     systemctl daemon-reload && systemctl daemon-reexec
+    ok "Input Config"
 }
 # -------------------------------------------------------------------------------
 
 ostree_cleanup() {
     if [ "$1" -eq 0 ]; then
-        echo "Ostree already has an update queued."
-        gum confirm "Cancel pending ostree operation?" && true || return 0
+        warn "Ostree already has an update queued."
+        gum confirm "Cancel pending ostree operation?" && true || needs_reboot=true
     fi
-    gum spin --spinner dot --title "Cancelling..." -- rpm-ostree cancel  
-    gum spin --spinner dot --title "Cancelling..." -- rpm-ostree cleanup -p
+    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
+    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
     ostree_complete=false
+    ok "Ostree cleared"
 }
 # -------------------------------------------------------------------------------
 
@@ -106,7 +114,7 @@ run_ostree_keepalive() {
         ostree_complete=true
         return 0
     else
-        echo "Invalid choice for run_ostree_keepalive: $1"
+        err "Invalid choice for run_ostree_keepalive: $1"
         return 1
     fi
   
@@ -137,13 +145,15 @@ run_ostree_keepalive() {
   wait "$spinner_pid" 2>/dev/null || true
 
   if [ "$rc" -eq 0 ]; then
-    echo "System image ready."
+    ok "System image ready"
     rm -f "$logfile"
     ostree_complete=true
+    needs_reboot=true
     return 0
   else
-    echo "Ostree update failed (exit code $rc). Last 200 lines:"
-    sudo tail -n 200 "$logfile"
+    err "Ostree update failed!" && info "(exit code $rc)."
+        if gum confirm "Display logs?"; then tail -n 200 "$logfile"
+        fi
     ostree_cleanup 1
     return $rc
   fi
@@ -166,6 +176,7 @@ system_update() {
             -- bash -c "flatpak update -y"
         gum spin --spinner dot --title "Updating user flatpaks..." \
             -- bash -c "flatpak update --user -y"
+        ok "Flatpak updates"
     else echo "Skipping system updates..."
     fi
 }
@@ -189,11 +200,11 @@ reboot_prompt() {
             gum spin --spinner dot --title "Shutting down..." -- bash -c "systemctl poweroff"
             ;;
         "Quit")
-            echo "goodbye."
+            ok " goodbye."
             exit 0
             ;;
         *)
-            echo "Invalid entry. Exiting..."
+            err "Invalid entry. Exiting..."
             exit 1
             ;;
     esac
@@ -201,6 +212,8 @@ reboot_prompt() {
 # -------------------------------------------------------------------------------
 
 # --- Main Script -- #
+info "Bluefin Triage and Configuration Tool"
+
 if ! rpm-ostree status | grep -qE "idle|Idle"; then
     ostree_complete=true
     ostree_cleanup 0
@@ -212,11 +225,21 @@ gum confirm "Display hardware information?" \
 gum confirm "Run auto-configuration?" \
     && auto_configure || echo "Skipping auto-configuration..."
 
-if gum confirm "Has the MOK (secure boot key) been enrolled?"; then
+if gum confirm "Has the Secure Boot key been enrolled?"; then
     echo "Skipping MOK enrollment..."
 else
-    gum spin --spinner dot -- ujust enroll-secure-boot-key
+    gum spin --spinner dot --title "Working..." -- sleep 3
+    if ! ujust enroll-secure-boot-key | grep -qE "SKIP|already enrolled"; then
+        needs_reboot=true
+        warn "At next reboot, ensure that secure boot is enabled in the BIOS."
+        info "The mokutil UEFI menu will be displayed upon boot. Select "Enroll MOK""
+        info "Enter < universalblue > as the password."
+    else 
+        ok "Secure Boot Key is already registered."
 fi
 
 system_update
+
+if needs_reboot; then warn "Logs indicate the system requires a reboot"
+fi
 reboot_prompt
