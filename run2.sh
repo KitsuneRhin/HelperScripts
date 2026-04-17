@@ -17,6 +17,7 @@ info()  { gum style --foreground "#8be9fd" "  $*"; }
 ## -- Define Functions -- ##
 
 display_info() {
+    echo ""
     gum spin --spinner dot --title "Gathering system info..." -- sleep 2
     # - PC Info -
     info "-- System --"
@@ -58,6 +59,7 @@ display_info() {
     if ! $bat_found; then
         err "Battery not found!"
     fi
+    echo ""
 }
 # -------------------------------------------------------------------------------
 
@@ -236,10 +238,12 @@ else
         info "Enter < universalblue > as the password."
     else 
         ok "Secure Boot Key is already registered."
+    fi
 fi
 
 system_update
 
-if needs_reboot; then warn "Logs indicate the system requires a reboot"
+if $needs_reboot; then 
+    warn "Logs indicate the system requires a reboot"
 fi
 reboot_prompt
