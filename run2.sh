@@ -8,7 +8,7 @@
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
-needs_reboot==false
+needs_reboot=false
 warn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
 ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
@@ -205,7 +205,7 @@ reboot_prompt() {
     case "$choice" in
         "Reboot")
             gum confirm "Reboot to BIOS?" && _flag="--firmware-setup" || true
-            gum spin --spinner dot --title "System rebooting..." -- bash -c "systemctl reboot "${bios_flag}""
+            gum spin --spinner dot --title "System rebooting..." -- bash -c "systemctl reboot "${_flag}""
             ;;
         "Shutdown")
             gum spin --spinner dot --title "Shutting down..." -- bash -c "systemctl poweroff"
@@ -223,14 +223,17 @@ reboot_prompt() {
 # -------------------------------------------------------------------------------
 
 # --- Main Script -- #
-echo "" && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
-gnome-extensions enable caffeine@patapon.info
+if [[ "$1" != "--inhibited" ]]; then
+    exec systemd-inhibit --what=sleep:idle \
+                         --who="C4PIN Config Tool" \
+                         --why="Running auto-configuration" \
+                         --mode=block \
+                         bash "$0" --inhibited
+fi
+
+echo ""
 gum spin --spinner dot --title "Initializing tool environment..." -- sleep 3
-gdbus call --session \
-    --dest org.gnome.Shell \
-    --object-path /org/gnome/Shell/Extensions/Caffeine \
-    --method org.gnome.Shell.Extensions.Caffeine.SetInhibit \
-    true
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 
 info "Bluefin Triage and Configuration Tool"
 
@@ -265,11 +268,5 @@ if $needs_reboot; then
     warn "Logs indicate the system requires a reboot"
 fi
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-light'
-gdbus call --session \
-    --dest org.gnome.Shell \
-    --object-path /org/gnome/Shell/Extensions/Caffeine \
-    --method org.gnome.Shell.Extensions.Caffeine.SetInhibit \
-    false
-gnome-extensions disable caffeine@patapon.info
 
 reboot_prompt
