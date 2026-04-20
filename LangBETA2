@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: KitsuneRhin @github
 # License: Apache 2.0
-# Version: 041326
+# Version: 042026
 
 set -euo pipefail
 
