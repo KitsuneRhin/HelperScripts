@@ -143,8 +143,8 @@ run_ostree_keepalive() {
     gum spin --spinner dot --title "Checking for updates..." -- \
         bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already up to date' '$logfile' 2>/dev/null; do sleep 1; done"
 
-    # Phase 2: only fires if actual content is being downloaded/staged
-    if grep -qiE "Downloading|Staging deployment" "$logfile"; then
+    # Phase 2: run unless rpm-ostree confirmed there's nothing to do
+    if ! grep -qiE "no upgrade available|already up to date" "$logfile"; then
         gum spin --spinner dot --title "Building system image..." -- \
             bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
     fi

@@ -51,9 +51,9 @@ local pid=$!
     gum spin --spinner dot --title "Checking for updates..." -- \
         bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already installed' '$logfile' 2>/dev/null; do sleep 1; done"
 
-    if grep -qiE "Downloading from|Importing|Checking out|Running|Staging deployment" "$logfile"; then
+    if ! grep -qiE "already installed|already present" "$logfile"; then
         gum spin --spinner dot --title "Layering language pack ${langpack}..." -- \
-            bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
+          bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
     fi
 
 wait "$pid" 2>/dev/null
