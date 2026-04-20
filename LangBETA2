@@ -35,10 +35,7 @@ ostree_cleanup() {
     fi
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
-    ostree_complete=falsewarn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
-err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
-ok()    { gum style --foreground "#50fa7b" "✓ $*"; }
-info()  { gum style --foreground "#8be9fd" "  $*"; }
+    ostree_complete=false
     ok "Ostree cleared"
 }
 
@@ -48,28 +45,21 @@ run_layer_keepalive() {
   logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
 
   # Start rpm-ostree in background
-  sudo rpm-ostree install -y "glibc-langpack-${langpack}" >"$logfile" 2>&1 &
-  local pid=$!
+  ( sudo rpm-ostree install -y "glibc-langpack-${langpack}" >"$logfile" 2>&1; echo $? >"$logfile.rc" ) &
+local pid=$!
 
-  # Spinner runs in parallel but does NOT wait inside gum
-  (
-    while kill -0 "$pid" 2>/dev/null; do
-      last=$(tail -n 50 "$logfile" | sed -n '/./p' | tail -n1)
-      last=${last:-"(no output yet)"}
-      echo "… $last"
-      sleep 2
-    done
-  ) | gum spin --spinner dot --title "Layering language pack ${langpack}" >/dev/null 2>&1 &
+gum spin --spinner dot --title "Checking for updates..." -- \
+    bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already installed' '$logfile' 2>/dev/null; do sleep 1; done"
 
-  local spinner_pid=$!
+if grep -qiE "Downloading|Staging deployment" "$logfile"; then
+    gum spin --spinner dot --title "Layering language pack ${langpack}..." -- \
+        bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
+fi
 
-  # Wait for the real rpm-ostree process
-  wait "$pid"
-  local rc=$?
-
-  # Stop spinner cleanly
-  kill "$spinner_pid" 2>/dev/null || true
-  wait "$spinner_pid" 2>/dev/null || true
+wait "$pid" 2>/dev/null
+local rc
+rc=$(cat "$logfile.rc" 2>/dev/null)
+rc=${rc:-1}
 
   if [ "$rc" -eq 0 ]; then
     echo "Layering completed successfully."
