@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: KitsuneRhin @github
 # License: Apache 2.0
-# Version: 042026
+# Version: 042126
 
 set -euo pipefail
 
@@ -31,7 +31,7 @@ info()  { gum style --foreground "#8be9fd" "  $*"; }
 ostree_cleanup() {
     if [ "$1" -eq 0 ]; then
         warn "Ostree already has an update queued."
-        gum confirm "Cancel pending ostree operation?" && true || info "Reboot PC to finish pending operation before running 2ndLang"
+        gum confirm "Cancel pending ostree operation?" && true || { info "Reboot PC to finish pending operation before running Language Script."; return 0; }
     fi
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
@@ -48,13 +48,13 @@ run_layer_keepalive() {
   ( sudo rpm-ostree install -y "glibc-langpack-${langpack}" >"$logfile" 2>&1; echo $? >"$logfile.rc" ) &
 local pid=$!
 
-gum spin --spinner dot --title "Checking for updates..." -- \
-    bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already installed' '$logfile' 2>/dev/null; do sleep 1; done"
+    gum spin --spinner dot --title "Checking for updates..." -- \
+        bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already installed' '$logfile' 2>/dev/null; do sleep 1; done"
 
-if grep -qiE "Downloading|Staging deployment" "$logfile"; then
-    gum spin --spinner dot --title "Layering language pack ${langpack}..." -- \
-        bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
-fi
+    if grep -qiE "Downloading from|Importing|Checking out|Running|Staging deployment" "$logfile"; then
+        gum spin --spinner dot --title "Layering language pack ${langpack}..." -- \
+            bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
+    fi
 
 wait "$pid" 2>/dev/null
 local rc

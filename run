@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.041726
+# Version: 2.042126
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
@@ -105,7 +105,7 @@ ok "Power Config"
 ostree_cleanup() {
     if [ "$1" -eq 0 ]; then
         warn "Ostree already has an update queued."
-        gum confirm "Cancel pending ostree operation?" && true || needs_reboot=true
+        gum confirm "Cancel pending ostree operation?" && true || { needs_reboot=true; return 0; }
     fi
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
