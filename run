@@ -8,6 +8,7 @@
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
+rebase_complete=false
 needs_reboot=false
 warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
@@ -114,6 +115,55 @@ ostree_cleanup() {
 }
 # -------------------------------------------------------------------------------
 
+nvidia_rebase() {
+    local logfile
+    local -a choice_cmd
+    logfile="$(mktemp /tmp/rpm-ostree-install.XXXXXX.log)"
+    choice_cmd=(bootc switch ghcr.io/ublue-os/bluefin-nvidia:stable --enforce-container-sigpolicy)
+
+    # Start rpm-ostree in background
+    ( "${choice_cmd[@]}" >"$logfile" 2>&1; echo $? >"$logfile.rc" ) &
+    local pid=$!
+
+    # Phase 1: just wait for rpm-ostree to begin working
+    gum spin --spinner dot --title "Connecting to image server..." -- \
+        bash -c "while ! grep -qiE 'layers already present|already at latest' '$logfile' 2>/dev/null; do sleep 1; done"
+
+    # Phase 2: run unless there's nothing to do
+    if ! grep -qiE "already at latest" "$logfile"; then
+        gum spin --spinner dot --title "Fetching NVIDIA image..." -- \
+            bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
+    fi
+
+    wait "$pid" 2>/dev/null
+    local rc
+    rc=$(cat "$logfile.rc" 2>/dev/null)
+    rc=${rc:-1}
+
+    if [ "$rc" -eq 0 ]; then
+        if grep -qiE "already at latest" "$logfile"; then
+            ok "System image is already up to date."
+            rm -f "$logfile" "$logfile.rc"
+            ostree_complete=false
+            return 0
+        fi
+        ok "System image ready."
+        rm -f "$logfile" "$logfile.rc"
+        ostree_complete=true
+        needs_reboot=true
+        return 0
+    else
+        err "Ostree update failed!" && info "(exit code $rc)."
+        if gum confirm "Display logs?"; then
+            tail -n 200 "$logfile"
+        fi
+        rm -f "$logfile" "$logfile.rc"
+        ostree_cleanup 1
+        return $rc
+    fi
+}
+# -------------------------------------------------------------------------------
+
 run_ostree_keepalive() {
     if $ostree_complete; then
         ostree_cleanup 0
@@ -123,7 +173,9 @@ run_ostree_keepalive() {
     if [ "$1" == "update" ]; then
         choice_cmd=(rpm-ostree upgrade)
     elif [ "$1" == "nvidia" ]; then
-        choice_cmd=(bootc switch ghcr.io/ublue-os/bluefin-nvidia:stable --enforce-container-sigpolicy)
+        nvidia_rebase
+        rebase_complete=true
+        return $?
     elif [ "$1" == "rebase" ]; then
         ujust --rebase-helper
         ostree_complete=true
@@ -155,7 +207,7 @@ run_ostree_keepalive() {
     rc=${rc:-1}
 
     if [ "$rc" -eq 0 ]; then
-        if grep -qiE "no upgrade available|already up to date" "$logfile"; then
+        if grep -qiE "no upgrade available|already up to date|already at latest" "$logfile"; then
             ok "System image is already up to date."
             rm -f "$logfile" "$logfile.rc"
             ostree_complete=false
@@ -185,11 +237,15 @@ system_update() {
     fi
     
     if gum confirm "Run system updates?"; then
-        if ! $ostree_complete; then
-            run_ostree_keepalive "update"
+        if ! $rebase_complete; then
+            if ! $ostree_complete; then
+                run_ostree_keepalive "update"
         else
             ostree_cleanup 0
         fi
+    else
+        info "Rebase already staged, skipping ostree update..."
+    fi
         gum spin --spinner dot --title "Updating system flatpaks..." \
             -- bash -c "flatpak update -y"
         gum spin --spinner dot --title "Updating user flatpaks..." \
