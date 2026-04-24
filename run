@@ -139,12 +139,12 @@ run_ostree_keepalive() {
     ( "${choice_cmd[@]}" >"$logfile" 2>&1; echo $? >"$logfile.rc" ) &
     local pid=$!
 
-    # Phase 1: exits when rpm-ostree has finished its check and made a decision
-    gum spin --spinner dot --title "Checking for updates..." -- \
-        bash -c "while ! grep -qiE 'Resolving dependencies|No upgrade|already up to date' '$logfile' 2>/dev/null; do sleep 1; done"
+    # Phase 1: just wait for rpm-ostree to begin working
+    gum spin --spinner dot --title "Connecting to image server..." -- \
+        bash -c "while ! grep -qiE 'Pulling manifest|No upgrade available|already up to date' '$logfile' 2>/dev/null; do sleep 1; done"
 
-    # Phase 2: run unless rpm-ostree confirmed there's nothing to do
-    if ! grep -qiE "no upgrade available|already up to date" "$logfile"; then
+    # Phase 2: run unless there's nothing to do
+    if ! grep -qiE "No upgrade available|already up to date" "$logfile"; then
         gum spin --spinner dot --title "Building system image..." -- \
             bash -c "while kill -0 $pid 2>/dev/null; do sleep 1; done"
     fi
