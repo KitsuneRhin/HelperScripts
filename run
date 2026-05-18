@@ -273,12 +273,17 @@ mok_util() {
 # -------------------------------------------------------------------------------
 
 install_flatpaks() {
-#	gum spin --spinner dot --title "Installing LibreOffice..." -- 
-flatpak install app/org.libreoffice.LibreOffice/x86_64/stable
-	gum spin --spinner dot --title "Configuring..." -- sleep 2
-	sudo rm /var/home/user/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
-	cp ./registrymodifications.xcu /var/home/user/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
-	ok "LibreOffice ready"
+	gum spin --spinner dot --title "Installing LibreOffice..." -- flatpak install app/org.libreoffice.LibreOffice/x86_64/stable --noninteractive --assumeyes
+	gum spin --spinner dot --title "Configuring..." -- sleep 5
+	sudo rm -f /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
+	sudo mkdir -p /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/
+	cp -f ./registrymodifications.xcu /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
+	
+	if [ ! -f "/var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu" ]; then
+		warn "config file did not transfer"
+	else
+		ok "LibreOffice ready"
+	fi
 }
 # -------------------------------------------------------------------------------
 
