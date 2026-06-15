@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# --- BURLINGTON GED PROGRAM SETUP SCRIPT ---
+# Written for C4PIN.org
+# Author: Devon Buecher | KitsuneRhin@github
+# License: Apache 2.0
+# Version: 2.051826
+
+set -o pipefail
+
+## -- Variables & Helpers -- ##
+USER_NAME="GEDstudent"
+USER_PASS="GEDandBeyond!"
+USER_UID=""
+USER_HOME=""
+USER_DBUS=""
+
+ADMIN_NAME="GEDadmin"
+ADMIN_PASS="2DsBLGtpp3"
+ADMIN_UID=""
+ADMIN_HOME=""
+ADMIN_DBUS=""
+
+warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
+err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
+ok()    { gum style --foreground "#00ff00" "✓ $*"; }
+info()  { gum style --foreground "#00aaff" "  $*"; }
+die()   { err "$*"; exit 1; }
+
+trap 'err "Script interrupted."; exit 130' INT TERM
+
+## -- Define Functions -- ##
+
+modify_users() {
+    gum spin --title "Creating student user..." -- sudo useradd -m "$USER_NAME" \
+        || die "Failed to create user '$USER_NAME'"
+    echo "$USER_NAME:$USER_PASS" | sudo chpasswd \
+        || die "Failed to set password for '$USER_NAME'"
+    gum spin --title "Renaming admin user..." -- sudo usermod -l "$ADMIN_NAME" "$USER" \
+        || die "Failed to rename '$USER' to '$ADMIN_NAME'"
+    echo "$ADMIN_NAME:$ADMIN_PASS" | sudo chpasswd \
+        || die "Failed to set password for '$ADMIN_NAME'"
+    ok "Users modified successfully."
+
+    gum spin --title "Populating user properties..." -- sleep 2
+    USER_UID=$(id -u "$USER_NAME") \
+        || die "Failed to get UID for '$USER_NAME'"
+    USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6) \
+        || die "Failed to get home directory for '$USER_NAME'"
+    [[ -z "$USER_HOME" ]] \
+        && die "Home directory entry for '$USER_NAME' is empty"
+    USER_DBUS="unix:path=/run/user/${USER_UID}/bus"
+    ADMIN_UID=$(id -u "$ADMIN_NAME") \
+        || die "Failed to get UID for '$ADMIN_NAME'"
+    ADMIN_HOME=$(getent passwd "$ADMIN_NAME" | cut -d: -f6) \
+        || die "Failed to get home directory for '$ADMIN_NAME'"
+    [[ -z "$ADMIN_HOME" ]] \
+        && die "Home directory entry for '$ADMIN_NAME' is empty"
+    ADMIN_DBUS="unix:path=/run/user/${ADMIN_UID}/bus"
+    ok "User properties populated."
+}
+
+install_flatpaks() {
+    gum spin --title "Installing Zoom..." -- flatpak install -y --system flathub us.zoom.Zoom \
+        || die "Failed to install Zoom"
+    gum spin --title "Installing Chrome..." -- flatpak install -y --system flathub com.google.Chrome \
+        || die "Failed to install Chrome"
+    ok "Flatpaks installed successfully."
+}
+
+
+configure_environment() {
+    local MIME_FILE
+
+    MIME_FILE="$USER_HOME/.config/mimeapps.list"
+    mkdir -p "$USER_HOME/.config" \
+        || die "Failed to create config directory for '$USER_NAME'"
+    sed -i '/x-scheme-handler\/http\|x-scheme-handler\/https\|text\/html\|application\/xhtml/d' "$MIME_FILE" 2>/dev/null || true
+    cat >> "$MIME_FILE" <<'EOF'
+[Default Applications]
+x-scheme-handler/http=com.google.Chrome.desktop
+x-scheme-handler/https=com.google.Chrome.desktop
+text/html=com.google.Chrome.desktop
+application/xhtml+xml=com.google.Chrome.desktop
+EOF
+    [[ $? -ne 0 ]] && die "Failed to write mimeapps.list for '$USER_NAME'"
+    chown "$USER_NAME:$USER_NAME" "$MIME_FILE" \
+        || die "Failed to set ownership of mimeapps.list for '$USER_NAME'"
+    ok "Student default browser set."
+
+    MIME_FILE="$ADMIN_HOME/.config/mimeapps.list"
+    mkdir -p "$ADMIN_HOME/.config" \
+        || die "Failed to create config directory for '$ADMIN_NAME'"
+    sed -i '/x-scheme-handler\/http\|x-scheme-handler\/https\|text\/html\|application\/xhtml/d' "$MIME_FILE" 2>/dev/null || true
+    cat >> "$MIME_FILE" <<'EOF'
+[Default Applications]
+x-scheme-handler/http=com.google.Chrome.desktop
+x-scheme-handler/https=com.google.Chrome.desktop
+text/html=com.google.Chrome.desktop
+application/xhtml+xml=com.google.Chrome.desktop
+EOF
+    [[ $? -ne 0 ]] && die "Failed to write mimeapps.list for '$ADMIN_NAME'"
+    chown "$ADMIN_NAME:$ADMIN_NAME" "$MIME_FILE" \
+        || die "Failed to set ownership of mimeapps.list for '$ADMIN_NAME'"
+    ok "Admin default browser set."
+}
+
+## -- Main -- ##
+modify_users
+install_flatpaks
+install_extension 4269 # Alphabetical App Grid
+install_extension 2087 # Desktop Icons (DING)
+configure_environment

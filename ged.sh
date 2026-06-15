@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.051826
+# Version: 1.061526
 
 ## -- Variables & Helpers -- ##
 USER_NAME="GEDstudent"
@@ -23,54 +23,34 @@ warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
 ok()    { gum style --foreground "#00ff00" "✓ $*"; }
 info()  { gum style --foreground "#00aaff" "  $*"; }
+die()   { err "$*"; exit 1; }
 
 ## -- Define Functions -- ##
 
 modify_users() {
-    gum spin --title "Creating student user..." -- sudo useradd -m "$USER_NAME"
-    echo "$USER_NAME:$USER_PASS" | sudo chpasswd
-    gum spin --title "Renaming admin user..." -- sudo usermod -l "$ADMIN_NAME" "$USER"
-    echo "$ADMIN_NAME:$ADMIN_PASS" | sudo chpasswd
-    ok "Users modified successfully."
+    gum spin --title "Creating student user..." -- sleep 2
+        sudo useradd -m "$USER_NAME"
+        echo "$USER_NAME:$USER_PASS" | sudo chpasswd || die "Failed to set student user password."
+    
+    gum spin --title "Configuring admin user..." -- sleep 2
+        echo "$USER:$ADMIN_PASS" | sudo chpasswd || die "Failed to set admin user password."
+        sudo usermod -l "$ADMIN_NAME" "$USER" || die "Failed to modify admin user."
+    ok "Users modified"
 
     gum spin --title "Populating user properties..." -- sleep 2
-    USER_UID=$(id -u "$USER_NAME")
-    USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
-    USER_DBUS="unix:path=/run/user/${USER_UID}/bus"
-    ADMIN_UID=$(id -u "$ADMIN_NAME")
-    ADMIN_HOME=$(getent passwd "$ADMIN_NAME" | cut -d: -f6)
-    ADMIN_DBUS="unix:path=/run/user/${ADMIN_UID}/bus"
-    ok "User properties populated."
+        USER_UID=$(id -u "$USER_NAME")
+        USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+        USER_DBUS="unix:path=/run/user/${USER_UID}/bus"
+        
+        ADMIN_UID=$(id -u "$ADMIN_NAME")
+        ADMIN_HOME=$(getent passwd "$ADMIN_NAME" | cut -d: -f6)
+        ADMIN_DBUS="unix:path=/run/user/${ADMIN_UID}/bus"
 }
 
 install_flatpaks() {
-    gum spin --title "Installing Zoom..." -- flatpak install -y --system flathub us.zoom.Zoom
-    gum spin --title "Installing Chrome..." -- flatpak install -y --system flathub com.google.Chrome
-    ok "Flatpaks installed successfully."
-}
-
-install_extension() {
-    local GNOME_VER
-    GNOME_VER=$(gnome-shell --version | grep -oP '\d+' | head -1)
-    local EXT_ID=$1
-    local INFO DOWNLOAD_URL UUID
-
-    INFO=$(curl -sf "https://extensions.gnome.org/extension-info/?pk=${EXT_ID}&shell_version=${GNOME_VER}")
-    DOWNLOAD_URL=$(echo "$INFO" | jq -r '.download_url')
-    UUID=$(echo "$INFO" | jq -r '.uuid')
-
-    gum spin --title "Downloading extension ${UUID}..." -- \
-        curl -sfL "https://extensions.gnome.org${DOWNLOAD_URL}" -o "/tmp/${UUID}.zip"
-
-    gum spin --title "Installing extension ${UUID}..." -- \
-        sudo -u "$USER_NAME" DBUS_SESSION_BUS_ADDRESS="$USER_DBUS" \
-            gnome-extensions install "/tmp/${UUID}.zip" --force
-
-    sudo -u "$USER_NAME" DBUS_SESSION_BUS_ADDRESS="$USER_DBUS" \
-        gnome-extensions enable "$UUID"
-
-    rm -f "/tmp/${UUID}.zip"
-    ok "Extension ${UUID} installed successfully."
+    gum spin --title "Installing Zoom..." -- flatpak install -y --system flathub us.zoom.Zoom || die "Failed to install Zoom."
+    gum spin --title "Installing Chrome..." -- flatpak install -y --system flathub com.google.Chrome || die "Failed to install Chrome."
+    ok "Flatpaks"
 }
 
 configure_environment() {
@@ -104,8 +84,12 @@ EOF
 }
 
 ## -- Main -- ##
+echo ""
+info "--- BURLINGTON GED PROGRAM SETUP SCRIPT ---"
+
 modify_users
 install_flatpaks
-install_extension 4269 # Alphabetical App Grid
-install_extension 2087 # Desktop Icons (DING)
 configure_environment
+ok "Script Complete."
+echo ""
+warn "The run.sh script must be run on the new user to complete the setup."

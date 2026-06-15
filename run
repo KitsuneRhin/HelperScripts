@@ -4,16 +4,18 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.051826
+# Version: 2.061526
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
 rebase_complete=false
 needs_reboot=false
+
 warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
 ok()    { gum style --foreground "#00ff00" "✓ $*"; }
 info()  { gum style --foreground "#00aaff" "  $*"; }
+die()   { err "$*"; exit 1; }
 
 ## -- Define Functions -- ##
 
@@ -68,6 +70,27 @@ display_info() {
 }
 # -------------------------------------------------------------------------------
 
+install_extension() {
+    local GNOME_VER
+    GNOME_VER=$(gnome-shell --version | grep -oP '\d+' | head -1)
+    local EXT_ID=$1
+    local INFO DOWNLOAD_URL UUID
+
+    INFO=$(curl -sf "https://extensions.gnome.org/extension-info/?pk=${EXT_ID}&shell_version=${GNOME_VER}")
+    DOWNLOAD_URL=$(echo "$INFO" | jq -r '.download_url')
+    UUID=$(echo "$INFO" | jq -r '.uuid')
+
+    gum spin --title "Downloading extension ${UUID}..." -- \
+        curl -sfL "https://extensions.gnome.org${DOWNLOAD_URL}" -o "/tmp/${UUID}.zip"
+
+    gum spin --title "Installing extension ${UUID}..." -- \
+            gnome-extensions install "/tmp/${UUID}.zip" --force
+    gnome-extensions enable "$UUID"
+
+    rm -f "/tmp/${UUID}.zip"
+}
+# -------------------------------------------------------------------------------
+
 auto_configure() {
     # --- Install Drop-in Override for Shutdown-on-Close ---
     gum spin --spinner dot --title "Applying power configuration" -- sleep 3
@@ -100,6 +123,12 @@ ok "Power Config"
     gum spin --spinner dot --title "Reloading systemd services" -- sleep 2
     systemctl daemon-reload && systemctl daemon-reexec
     ok "Input Config"
+
+    # --- Install Extensions ---
+    gum spin --spinner dot --title "Installing Extentions - Alphabetical App Grid..." -- install_extension 4269
+        ok "App Grid"
+    gum spin --spinner dot --title "Installing Extentions - Desktop Icons (DING)..." -- install_extension 2087
+        ok "Desktop Icons"
 }
 # -------------------------------------------------------------------------------
 
