@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.061526
+# Version: 2.062926
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
@@ -53,7 +53,12 @@ display_info() {
         done
     fi
 	echo ""
-	
+
+    # - GPU Info -
+    info "-- GPU --"
+    lspci | grep --color=always -E "VGA|3D|Display" | sed 's/^[[:space:]]*//'
+	echo ""
+
     # - Battery info -
     info "-- Battery --"
     bat_found=false
@@ -71,20 +76,38 @@ display_info() {
 # -------------------------------------------------------------------------------
 
 install_extension() {
+    [ -n "$1" ] || { err "install_extension called with no extension ID"; return 1; }
+
     local GNOME_VER
     GNOME_VER=$(gnome-shell --version | grep -oP '\d+' | head -1)
     local EXT_ID=$1
     local INFO DOWNLOAD_URL UUID
 
     INFO=$(curl -sf "https://extensions.gnome.org/extension-info/?pk=${EXT_ID}&shell_version=${GNOME_VER}")
+    if [ -z "$INFO" ]; then
+        err "Could not reach extensions.gnome.org for extension ID ${EXT_ID}"
+        return 1
+    fi
+
     DOWNLOAD_URL=$(echo "$INFO" | jq -r '.download_url')
     UUID=$(echo "$INFO" | jq -r '.uuid')
+
+    if [ "$DOWNLOAD_URL" == "null" ] || [ "$UUID" == "null" ]; then
+        err "Could not find extension info for ID ${EXT_ID} (GNOME ${GNOME_VER})"
+        return 1
+    fi
 
     gum spin --title "Downloading extension ${UUID}..." -- \
         curl -sfL "https://extensions.gnome.org${DOWNLOAD_URL}" -o "/tmp/${UUID}.zip"
 
-    gum spin --title "Installing extension ${UUID}..." -- \
-            gnome-extensions install "/tmp/${UUID}.zip" --force
+    if ! gum spin --title "Installing extension ${UUID}..." -- \
+            gnome-extensions install "/tmp/${UUID}.zip" --force; then
+        err "Failed to install extension ${UUID}"
+        rm -f "/tmp/${UUID}.zip"
+        return 1
+    fi
+
+    sleep 1
     gnome-extensions enable "$UUID"
 
     rm -f "/tmp/${UUID}.zip"
@@ -125,9 +148,9 @@ ok "Power Config"
     ok "Input Config"
 
     # --- Install Extensions ---
-    gum spin --spinner dot --title "Installing Extentions - Alphabetical App Grid..." -- install_extension 4269
+    install_extension 4269 || die "Failed to install App Grid extension."
         ok "App Grid"
-    gum spin --spinner dot --title "Installing Extentions - Desktop Icons (DING)..." -- install_extension 2087
+    install_extension 2087 || die "Failed to install Desktop Icons extension."
         ok "Desktop Icons"
 }
 # -------------------------------------------------------------------------------
@@ -222,7 +245,7 @@ run_ostree_keepalive() {
 
     # Phase 1: just wait for rpm-ostree to begin working
     gum spin --spinner dot --title "Connecting to image server..." -- \
-        bash -c "while ! grep -qiE 'Pulling manifest|No upgrade available|already up to date' '$logfile' 2>/dev/null; do sleep 1; done"
+        bash -c "while ! grep -qiE 'Pulling manifest|No upgrade available|already up to date' '$logfile' 2>/dev/null; do sleep 2; done"
 
     # Phase 2: run unless there's nothing to do
     if ! grep -qiE "No upgrade available|already up to date" "$logfile"; then
@@ -259,27 +282,58 @@ run_ostree_keepalive() {
 }
 # -------------------------------------------------------------------------------
 
-system_update() {
-    if gum confirm "Does this device have an NVIDIA discrete graphics unit?"; then
-            gum confirm "Rebase to Bluefin-NVIDIA image?" \
-                && run_ostree_keepalive "nvidia" || return 0
+firmware_update() {
+    local logfile
+    logfile="$(mktemp /tmp/fwupd-install.XXXXXX.log)"
+
+    gum spin --spinner dot --title "Refreshing firmware metadata..." -- \
+        bash -c "fwupdmgr refresh --force -y >'$logfile' 2>&1"
+
+    if ! fwupdmgr get-updates >>"$logfile" 2>&1 || grep -qiE "No updates available|Devices with no available firmware updates" "$logfile"; then
+        ok "Firmware is already up to date"
+        rm -f "$logfile"
+        return 0
     fi
-    
+
+    gum spin --spinner dot --title "Installing firmware updates..." -- \
+        bash -c "fwupdmgr update -y >>'$logfile' 2>&1"
+    local rc=$?
+
+    if [ "$rc" -eq 0 ]; then
+        ok "Firmware updated."
+        needs_reboot=true
+    else
+        warn "Firmware update finished with warnings (exit code $rc)."
+        if gum confirm "Display logs?"; then tail -n 200 "$logfile"; fi
+    fi
+    rm -f "$logfile"
+}
+# -------------------------------------------------------------------------------
+
+system_update() {
+    if lspci | grep -iE "VGA|3D|Display" | grep -qi nvidia; then
+        gum confirm "NVIDIA GPU detected. Rebase to Bluefin-NVIDIA image?" \
+            && run_ostree_keepalive "nvidia" || true
+    fi
+
     if gum confirm "Run system updates?"; then
         if ! $rebase_complete; then
             if ! $ostree_complete; then
                 run_ostree_keepalive "update"
+            else
+                ostree_cleanup 0
+            fi
         else
-            ostree_cleanup 0
+            info "Rebase already staged, skipping ostree update..."
         fi
-    else
-        info "Rebase already staged, skipping ostree update..."
-    fi
         gum spin --spinner dot --title "Updating system flatpaks..." \
-            -- bash -c "flatpak update -y"
+            -- bash -c "flatpak update --system -y"
         gum spin --spinner dot --title "Updating user flatpaks..." \
             -- bash -c "flatpak update --user -y"
         ok "Flatpaks updated."
+
+        firmware_update
+
     else echo "Skipping system updates..."
     fi
 }
@@ -304,11 +358,11 @@ mok_util() {
 install_flatpaks() {
 	gum spin --spinner dot --title "Installing LibreOffice..." -- flatpak install app/org.libreoffice.LibreOffice/x86_64/stable --noninteractive --assumeyes
 	gum spin --spinner dot --title "Configuring..." -- sleep 5
-	sudo rm -f /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
-	sudo mkdir -p /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/
-	cp -f ./registrymodifications.xcu /var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu
-	
-	if [ ! -f "/var/home/$USER/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu" ]; then
+	rm -f "$HOME/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu"
+	mkdir -p "$HOME/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/"
+	cp -f ./registrymodifications.xcu "$HOME/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu"
+
+	if [ ! -f "$HOME/.var/app/org.libreoffice.LibreOffice/config/libreoffice/4/user/registrymodifications.xcu" ]; then
 		warn "config file did not transfer"
 	else
 		ok "LibreOffice ready"
@@ -355,27 +409,77 @@ if [[ "$1" != "--inhibited" ]]; then
                          bash "$0" --inhibited
 fi
 
+clean_gsettings_val() {
+    local v="$1"
+    v="${v#uint32 }"
+    v="${v#\'}"
+    v="${v%\'}"
+    echo "$v"
+}
+
+orig_idle_delay=$(clean_gsettings_val "$(gsettings get org.gnome.desktop.session idle-delay)")
+orig_ac_type=$(clean_gsettings_val "$(gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)")
+orig_battery_type=$(clean_gsettings_val "$(gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type)")
+
+restore_idle_settings() {
+    gsettings set org.gnome.desktop.session idle-delay "$orig_idle_delay"
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "$orig_ac_type"
+    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type "$orig_battery_type"
+}
+trap restore_idle_settings EXIT
+
+gsettings set org.gnome.desktop.session idle-delay 0
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
+
+command -v jq >/dev/null || die "jq is required but not installed"
+
 echo ""
 info "Bluefin Triage and Configuration Tool"
+
+mode=$(printf "%s\n" \
+    "Full Configuration" \
+    "Hardware Info Only" \
+    "Quit" \
+    | gum choose --height=8 --cursor=">")
+
+case "$mode" in
+    "Hardware Info Only")
+        display_info
+        echo ""
+        ok "-- Done. --"
+        exit 0
+        ;;
+    "Quit")
+        echo "Goodbye."
+        exit 0
+        ;;
+    "Full Configuration")
+        : # fall through to the rest of the script below
+        ;;
+    *)
+        err "Invalid entry. Exiting..."
+        exit 1
+        ;;
+esac
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
     ostree_complete=true
     ostree_cleanup 0
 fi
 
-gum confirm "Display hardware information?" \
-    && display_info || true
-
 gum confirm "Run auto-configuration?" \
     && auto_configure || echo "Skipping auto-configuration..."
 
-gum confirm "Has the Secure Boot key been enrolled?" \
-    && echo "Skipping MOK enrollment..." || mok_util
-
+mok_util
 system_update
 
 gum confirm "Install new Flatpaks? (LibreOffice)" \
-    && install_flatpaks echo || "Skipping new Flatpak installation..."
+    && install_flatpaks || echo "Skipping new Flatpak installation..."
+
+user_home=$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)
+gum confirm "Push user guide to desktop?" \
+    && cp ./Bluefin\ User\ Guide*.pdf "$user_home/Desktop/" || echo "Skipping user guide..."
 
 echo ""
 ok "-- Script complete. --"

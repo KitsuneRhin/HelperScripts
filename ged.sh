@@ -46,12 +46,14 @@ modify_users() {
         ADMIN_HOME=$(getent passwd "$ADMIN_NAME" | cut -d: -f6)
         ADMIN_DBUS="unix:path=/run/user/${ADMIN_UID}/bus"
 }
+# -------------------------------------------------------------------------------
 
 install_flatpaks() {
     gum spin --title "Installing Zoom..." -- flatpak install -y --system flathub us.zoom.Zoom || die "Failed to install Zoom."
     gum spin --title "Installing Chrome..." -- flatpak install -y --system flathub com.google.Chrome || die "Failed to install Chrome."
     ok "Flatpaks"
 }
+# -------------------------------------------------------------------------------
 
 configure_environment() {
     local MIME_FILE
