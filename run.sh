@@ -4,18 +4,24 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-# Version: 2.062926
+Version="2 - 06/29/2026"
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
 rebase_complete=false
 needs_reboot=false
+real_user="${SUDO_USER:-$USER}"
+real_uid=$(id -u "$real_user")
+user_dbus="unix:path=/run/user/${real_uid}/bus"
 
 warn()  { gum style --foreground "#ffd700" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
 ok()    { gum style --foreground "#00ff00" "✓ $*"; }
 info()  { gum style --foreground "#00aaff" "  $*"; }
 die()   { err "$*"; exit 1; }
+gset() { sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="$user_dbus" gsettings set "$@"; }
+gget() { sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="$user_dbus" gsettings get "$@"; }
+
 
 ## -- Define Functions -- ##
 
@@ -115,17 +121,18 @@ install_extension() {
 # -------------------------------------------------------------------------------
 
 auto_configure() {
+
     # --- Install Drop-in Override for Shutdown-on-Close ---
     gum spin --spinner dot --title "Applying power configuration" -- sleep 3
-    gsettings set org.gnome.desktop.session idle-delay 600 # 10 min
-    gsettings set org.gnome.settings-daemon.plugins.power idle-dim true
-    gsettings set org.gnome.settings-daemon.plugins.power idle-brightness 20
-    gsettings set org.gnome.desktop.screensaver lock-enabled true
-    gsettings set org.gnome.desktop.screensaver lock-delay 30
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 1800 # 30 min
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'suspend'
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 900 # 15 min
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'suspend'
+    gset org.gnome.desktop.session idle-delay 600 # 10 min
+    gset org.gnome.settings-daemon.plugins.power idle-dim true
+    gset org.gnome.settings-daemon.plugins.power idle-brightness 20
+    gset org.gnome.desktop.screensaver lock-enabled true
+    gset org.gnome.desktop.screensaver lock-delay 30
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 1800 # 30 min
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'suspend'
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 900 # 15 min
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'suspend'
     sudo mkdir -p /etc/systemd/logind.conf.d
     sudo tee /etc/systemd/logind.conf.d/lid-switch.conf > /dev/null << EOF
 [Login]
@@ -138,11 +145,12 @@ ok "Power Config"
 
     # --- Update Touchpad and Keyboard Settings ---
     gum spin --spinner dot --title "Applying input configuration..." -- sleep 3
-    gsettings set org.gnome.desktop.input-sources xkb-options "['compose:ralt','lv3:rwin']"
-    gsettings set org.gnome.desktop.peripherals.touchpad tap-to-click true
-    gsettings set org.gnome.desktop.peripherals.touchpad natural-scroll true
-    gsettings set org.gnome.desktop.peripherals.touchpad disable-while-typing true
-    gsettings set org.gnome.desktop.peripherals.touchpad click-method 'areas'
+    gset org.gnome.desktop.input-sources xkb-options "['lv3:rwin','compose:ralt']"
+    gset org.gnome.desktop.peripherals.touchpad tap-to-click true
+    gset org.gnome.desktop.peripherals.touchpad natural-scroll true
+    gset org.gnome.desktop.peripherals.touchpad disable-while-typing true
+    gset org.gnome.desktop.peripherals.touchpad two-finger-scrolling-enabled true
+    gset org.gnome.desktop.peripherals.touchpad click-method 'areas'
     gum spin --spinner dot --title "Reloading systemd services" -- sleep 2
     systemctl daemon-reload && systemctl daemon-reexec
     ok "Input Config"
@@ -417,34 +425,36 @@ clean_gsettings_val() {
     echo "$v"
 }
 
-orig_idle_delay=$(clean_gsettings_val "$(gsettings get org.gnome.desktop.session idle-delay)")
-orig_ac_type=$(clean_gsettings_val "$(gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)")
-orig_battery_type=$(clean_gsettings_val "$(gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type)")
+orig_idle_delay=$(clean_gsettings_val "$(gget org.gnome.desktop.session idle-delay)")
+orig_ac_type=$(clean_gsettings_val "$(gget org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)")
+orig_battery_type=$(clean_gsettings_val "$(gget org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type)")
 
 restore_idle_settings() {
-    gsettings set org.gnome.desktop.session idle-delay "$orig_idle_delay"
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "$orig_ac_type"
-    gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type "$orig_battery_type"
+    gset org.gnome.desktop.session idle-delay "$orig_idle_delay"
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "$orig_ac_type"
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type "$orig_battery_type"
 }
 trap restore_idle_settings EXIT
 
-gsettings set org.gnome.desktop.session idle-delay 0
-gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
-gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
+gset org.gnome.desktop.session idle-delay 0
+gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 
 command -v jq >/dev/null || die "jq is required but not installed"
 
 echo ""
 info "Bluefin Triage and Configuration Tool"
+info "Version $Version"
+echo ""
 
 mode=$(printf "%s\n" \
-    "Full Configuration" \
-    "Hardware Info Only" \
+    "Configuration" \
+    "Hardware Info" \
     "Quit" \
     | gum choose --height=8 --cursor=">")
 
 case "$mode" in
-    "Hardware Info Only")
+    "Hardware Info")
         display_info
         echo ""
         ok "-- Done. --"
@@ -454,7 +464,7 @@ case "$mode" in
         echo "Goodbye."
         exit 0
         ;;
-    "Full Configuration")
+    "Configuration")
         : # fall through to the rest of the script below
         ;;
     *)
