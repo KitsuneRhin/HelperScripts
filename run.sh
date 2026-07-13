@@ -20,8 +20,6 @@ ok()    { gum style --foreground "#00ff00" "✓ $*"; }
 info()  { gum style --foreground "#00aaff" "  $*"; }
 die()   { err "$*"; exit 1; }
 gset() { sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="$user_dbus" gsettings set "$@"; }
-gget() { sudo -u "$real_user" DBUS_SESSION_BUS_ADDRESS="$user_dbus" gsettings get "$@"; }
-
 
 ## -- Define Functions -- ##
 

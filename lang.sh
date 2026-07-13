@@ -4,7 +4,6 @@
 # Written for C4PIN.org
 # Author: KitsuneRhin @github
 # License: Apache 2.0
-# Version: 042126
 
 set -euo pipefail
 
@@ -18,6 +17,7 @@ russian="ru_RU.UTF-8"
 colombian="es_CO.UTF-8"
 
 ## -- Internal Variables -- ##
+VERSION="07/13/26"
 USERNAME=""
 PASSWD=""
 LANG=""
@@ -76,9 +76,10 @@ rc=${rc:-1}
 }
 
 
+run_lang() {
 ## -- Part 1 -- ##
 # Create Profile and Layer in Language Pack (user-specific)
-part_1() {
+
   echo "Creating user profile '$USERNAME'..."
   sudo useradd -m "$USERNAME"
 
@@ -102,24 +103,16 @@ EOF
   	gum confirm "Layering failed. Continue anyway?" || { echo "Aborting."; exit 1; }
     ostree_complete=false
   fi
-}
 
 ## -- Part 2 -- ##
 # Configure Local Language Options
-part_2() {
-  gum spin --spinner dot --title "Applying keyboard configuration..." -- sleep 3
-  sudo mkdir -p /etc/dconf/db/local.d
-  sudo tee /etc/dconf/db/local.d/00-keyboard > /dev/null <<EOF
-[org/gnome/desktop/input-sources]
-xkb-options=['compose:ralt','lv3:rwin']
-EOF
-
-  if ! grep -q '^system-db:local' /etc/dconf/profile/user 2>/dev/null; then
-    echo -e "user-db:user\nsystem-db:local" | sudo tee /etc/dconf/profile/user > /dev/null
-  fi
 
   gum spin --spinner dot --title "Updating program locales..." -- sleep 3
-  sudo dconf update
+    sudo -u "$USERNAME" -H flatpak config --user --set languages "en;${langpack}"
+    sudo -u "$USERNAME" -H flatpak override --user --env=LANG="$LANG" --env=LC_ALL="$LANG"
+    sudo flatpak config --system --set languages "en;${langpack}"
+    sudo -u "$USERNAME" -H flatpak update --user -y
+  gum spin --spinner dot --title "Updating system flatpaks for language support (this may take a while)..." -- sudo flatpak update --system -y
   echo "Locales updated."
 }
 
@@ -171,6 +164,7 @@ reboot_prompt() {
 
 ## -- Main -- ##
 echo -e "\n-- Second-Language Profile Creator --\n"
+echo "Version $VERSION"
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
     ostree_complete=true
@@ -195,8 +189,7 @@ while [ "$match" -eq 0 ]; do
   fi
 done
 # --
-part_1
-part_2
+run_lang
 
 echo ""
 if $ostree_complete; then
