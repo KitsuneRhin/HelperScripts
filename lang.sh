@@ -20,8 +20,8 @@ colombian="es_CO.UTF-8"
 VERSION="07/13/26"
 USERNAME=""
 PASSWD=""
-LANG=""
-ostree_complete=false
+NEW_LANG=""
+reboot_needed=false
 
 warn()  { gum style --foreground "#ffaf00" --bold "⚠ $*"; }
 err()   { gum style --foreground "#ff5555" --bold "✗ $*"; }
@@ -33,9 +33,9 @@ ostree_cleanup() {
         warn "Ostree already has an update queued."
         gum confirm "Cancel pending ostree operation?" && true || { info "Reboot PC to finish pending operation before running Language Script."; return 0; }
     fi
-    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel  
+    gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cancel
     gum spin --spinner dot --title "Cleaning up..." -- rpm-ostree cleanup -p
-    ostree_complete=false
+    reboot_needed=false
     ok "Ostree cleared"
 }
 
@@ -63,13 +63,13 @@ rc=${rc:-1}
 
   if [ "$rc" -eq 0 ]; then
     echo "Layering completed successfully."
-    ostree_complete=true
+    reboot_needed=true
     rm -f "$logfile"
     return 0
   else
     err "Ostree update failed!" && info "(exit code $rc)."
-        if gum confirm "Display logs?"; then tail -n 200 "$logfile"
-        fi
+    if gum confirm "Display logs?"; then tail -n 200 "$logfile"; fi
+    rm -f "$logfile.rc"
     ostree_cleanup 1
     return $rc
   fi
@@ -93,25 +93,25 @@ run_lang() {
   sudo mkdir -p /var/lib/AccountsService/users
   sudo tee /var/lib/AccountsService/users/"$USERNAME" > /dev/null <<EOF
 [User]
-Language=$LANG
+Language=$NEW_LANG
 EOF
   sudo chown root:root /var/lib/AccountsService/users/"$USERNAME"
   sudo chmod 644 /var/lib/AccountsService/users/"$USERNAME"
 
-  langpack=$(echo "$LANG" | cut -d_ -f1 | cut -d. -f1)
+  langpack=$(echo "$NEW_LANG" | cut -d_ -f1 | cut -d. -f1)
   if ! run_layer_keepalive "$langpack"; then
-  	gum confirm "Layering failed. Continue anyway?" || { echo "Aborting."; exit 1; }
-    ostree_complete=false
+    gum confirm "Layering failed. Continue anyway?" || { echo "Aborting."; exit 1; }
+    reboot_needed=false
   fi
 
 ## -- Part 2 -- ##
 # Configure Local Language Options
 
   gum spin --spinner dot --title "Updating program locales..." -- sleep 3
-    sudo -u "$USERNAME" -H flatpak config --user --set languages "en;${langpack}"
-    sudo -u "$USERNAME" -H flatpak override --user --env=LANG="$LANG" --env=LC_ALL="$LANG"
-    sudo flatpak config --system --set languages "en;${langpack}"
-    sudo -u "$USERNAME" -H flatpak update --user -y
+  sudo -u "$USERNAME" -H flatpak config --user --set languages "en;${langpack}"
+  sudo -u "$USERNAME" -H flatpak override --user --env=LANG="$NEW_LANG" --env=LC_ALL="$NEW_LANG"
+  sudo flatpak config --system --set languages "en;${langpack}"
+  gum spin --spinner dot --title "Updating user flatpaks for language support..." -- sudo -u "$USERNAME" -H flatpak update --user -y
   gum spin --spinner dot --title "Updating system flatpaks for language support (this may take a while)..." -- sudo flatpak update --system -y
   echo "Locales updated."
 }
@@ -130,8 +130,9 @@ select_lang() {
 
   echo "Select a language:"
   selection=$(printf "%s\n" "${LANG_OPTIONS[@]}" | cut -d: -f1 | gum choose)
+  [ -z "$selection" ] && { err "No language selected. Exiting."; exit 1; }
   varname=$(printf "%s\n" "${LANG_OPTIONS[@]}" | grep "^$selection:" | cut -d: -f2)
-  LANG=${!varname}
+  NEW_LANG=${!varname}
 }
 
 ## -- Reboot Menu -- ##
@@ -167,9 +168,9 @@ echo -e "\n-- Second-Language Profile Creator --\n"
 echo "Version $VERSION"
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
-    ostree_complete=true
+    reboot_needed=true
     ostree_cleanup 0
-    if $ostree_complete; then
+    if $reboot_needed; then
       reboot_prompt
     fi
 fi
@@ -177,6 +178,7 @@ fi
 select_lang
 # User Inputs
 USERNAME=$(gum input --placeholder "enter new username...")
+[ -z "$USERNAME" ] && { err "No username entered. Exiting."; exit 1; }
 match=0
 while [ "$match" -eq 0 ]; do
   var1=$(gum input --placeholder "enter password for $USERNAME...")
@@ -192,7 +194,7 @@ done
 run_lang
 
 echo ""
-if $ostree_complete; then
+if $reboot_needed; then
   warn "System requires a reboot to finish configuration."
 fi
 reboot_prompt
