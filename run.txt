@@ -4,7 +4,7 @@
 # Written for C4PIN.org
 # Author: Devon Buecher | KitsuneRhin@github
 # License: Apache 2.0
-Version="2 - 07/13/2026"
+Version="2 - 06/29/2026"
 
 ## -- Variables & Helpers -- ##
 ostree_complete=false
@@ -124,13 +124,15 @@ auto_configure() {
 
     # --- Install Drop-in Override for Shutdown-on-Close ---
     gum spin --spinner dot --title "Applying power configuration" -- sleep 3
+    gset org.gnome.desktop.session idle-delay 600 # 10 min
     gset org.gnome.settings-daemon.plugins.power idle-dim true
     gset org.gnome.settings-daemon.plugins.power idle-brightness 20
     gset org.gnome.desktop.screensaver lock-enabled true
+    gset org.gnome.desktop.screensaver lock-delay 30
     gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 1800 # 30 min
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'suspend'
     gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 900 # 15 min
-
-
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'suspend'
     sudo mkdir -p /etc/systemd/logind.conf.d
     sudo tee /etc/systemd/logind.conf.d/lid-switch.conf > /dev/null << EOF
 [Login]
@@ -143,7 +145,7 @@ ok "Power Config"
 
     # --- Update Touchpad and Keyboard Settings ---
     gum spin --spinner dot --title "Applying input configuration..." -- sleep 3
-    gset org.gnome.desktop.input-sources xkb-options "['compose:ralt','lv3:none']"
+    gset org.gnome.desktop.input-sources xkb-options "['lv3:rwin','compose:ralt']"
     gset org.gnome.desktop.peripherals.touchpad tap-to-click true
     gset org.gnome.desktop.peripherals.touchpad natural-scroll true
     gset org.gnome.desktop.peripherals.touchpad disable-while-typing true
@@ -415,12 +417,28 @@ if [[ "$1" != "--inhibited" ]]; then
                          bash "$0" --inhibited
 fi
 
-restore_idle_settings() {
-    gset org.gnome.desktop.screensaver lock-delay 30
-    gset org.gnome.desktop.session idle-delay 600 # 10 min
-    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'suspend'
-    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'suspend'
+clean_gsettings_val() {
+    local v="$1"
+    v="${v#uint32 }"
+    v="${v#\'}"
+    v="${v%\'}"
+    echo "$v"
 }
+
+orig_idle_delay=$(clean_gsettings_val "$(gget org.gnome.desktop.session idle-delay)")
+orig_ac_type=$(clean_gsettings_val "$(gget org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)")
+orig_battery_type=$(clean_gsettings_val "$(gget org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type)")
+
+restore_idle_settings() {
+    gset org.gnome.desktop.session idle-delay "$orig_idle_delay"
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "$orig_ac_type"
+    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type "$orig_battery_type"
+}
+trap restore_idle_settings EXIT
+
+gset org.gnome.desktop.session idle-delay 0
+gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 
 command -v jq >/dev/null || die "jq is required but not installed"
 
@@ -454,13 +472,6 @@ case "$mode" in
         exit 1
         ;;
 esac
-
-trap restore_idle_settings EXIT
-
-    gset org.gnome.desktop.screensaver lock-delay 1000
-    gset org.gnome.desktop.session idle-delay 0
-    gset org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
-    gset org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
 
 if ! rpm-ostree status | grep -qE "idle|upgraded|removed|added"; then
     ostree_complete=true
